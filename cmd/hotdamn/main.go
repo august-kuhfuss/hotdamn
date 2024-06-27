@@ -18,20 +18,17 @@ import (
 	"github.com/august-kuhfuss/hotdamn"
 	"github.com/august-kuhfuss/hotdamn/handler"
 	"github.com/august-kuhfuss/hotdamn/store"
-	mockstore "github.com/august-kuhfuss/hotdamn/store/mock_store"
-	sqlitestore "github.com/august-kuhfuss/hotdamn/store/sqlite_store"
+	"github.com/august-kuhfuss/hotdamn/store/mock"
+	"github.com/august-kuhfuss/hotdamn/store/sqlite"
 	"github.com/august-kuhfuss/hotdamn/tasks"
-	fetchtemperature "github.com/august-kuhfuss/hotdamn/tasks/fetch_temperature"
 	"github.com/urfave/cli/v2"
 )
 
 var (
+	demoMode              = false
 	defaultSqliteFilePath = path.Join(defaultDataDir, "hotdamn.db")
 
-	s        store.Store
-	ts       []tasks.Task
-	demoMode = false
-	cmd      = &cli.App{
+	cmd = &cli.App{
 		Name:    "hotdamn",
 		Usage:   "check weather in room (yes, it's hot in here)",
 		Version: hotdamn.Version(),
@@ -63,6 +60,29 @@ var (
 		},
 		Commands: []*cli.Command{
 			{
+				Name:    "database",
+				Aliases: []string{"db"},
+				Usage:   "database management",
+				Subcommands: []*cli.Command{
+					{
+						Name:    "migrate-up",
+						Aliases: []string{"up"},
+						Usage:   "migrate database up",
+						Action: func(ctx *cli.Context) error {
+							return sqlite.MigrateUp()
+						},
+					},
+					{
+						Name:    "migrate-down",
+						Aliases: []string{"down"},
+						Usage:   "migrate database down",
+						Action: func(ctx *cli.Context) error {
+							return sqlite.MigrateDown()
+						},
+					},
+				},
+			},
+			{
 				Name:    "run",
 				Aliases: []string{"start", "serve"},
 				Usage:   "start the http server",
@@ -77,60 +97,65 @@ var (
 						HasBeenSet: true,
 					},
 					&cli.StringSliceFlag{
-						Usage:      "thermometer ip addresses",
-						Name:       "thermometer-ips",
-						EnvVars:    []string{"THERMOMETER_IPS"},
+						Usage:      "sensor ip addresses",
+						Name:       "sensor-ips",
+						EnvVars:    []string{"SENSOR_IPS"},
 						Required:   true,
 						HasBeenSet: true,
 					},
 					&cli.IntFlag{
 						Usage:   "temperature fetch interval in seconds",
-						Name:    "temperature-fetch-interval",
+						Name:    "sensor-fetch-interval",
 						Aliases: []string{"interval"},
-						EnvVars: []string{"TEMPERATURE_FETCH_INTERVAL"},
+						EnvVars: []string{"SENSOR_FETCH_INTERVAL"},
 						Value:   defaultFetchIntervalSeconds,
 					},
 				},
-				Before: func(ctx *cli.Context) error {
-					var err error
+				Action: func(ctx *cli.Context) error {
+					var st store.Store
 					if demoMode {
-						s = mockstore.NewStore()
+						st = mock.NewStore()
 						slog.Info("demo mode enabled")
 						return nil
 					}
 
-					s, err = sqlitestore.NewStore(ctx.String("sqlite-file-path"))
+					var err error
+					st, err = sqlite.NewStore(ctx.String("sqlite-file-path"))
 					if err != nil {
 						slog.Error("unable to create database store", slog.String("msg", err.Error()))
 						return err
 					}
-					defer sqlitestore.Close()
+					defer sqlite.Close()
 
-					if err := sqlitestore.Ping(); err != nil {
+					if err := sqlite.Ping(); err != nil {
 						slog.Error("unable to ping database", slog.String("msg", err.Error()))
 						return err
 					}
 
-					tips := ctx.StringSlice("thermometer-ips")
-					tfi := ctx.Int("temperature-fetch-interval")
-					ts = []tasks.Task{
-						fetchtemperature.NewTask(tips, time.Duration(tfi)*time.Second),
+					if err := sqlite.MigrateUp(); err != nil {
+						slog.Error("unable to migrate database up", slog.String("msg", err.Error()))
+						return err
 					}
 
-					return nil
-				},
-				Action: func(ctx *cli.Context) error {
+					tsks := []tasks.Task{
+						tasks.NewFetchTemperatureTask(
+							ctx.StringSlice("sensor-ips"),
+							time.Duration(ctx.Int("sensor-fetch-interval"))*time.Second,
+							st,
+						),
+					}
+
 					port := ctx.Int("port")
 					httpSrv := &http.Server{
 						Addr:    fmt.Sprintf(":%d", port),
-						Handler: handler.New(s),
+						Handler: handler.New(st),
 					}
 
 					context, stop := signal.NotifyContext(ctx.Context, os.Interrupt, syscall.SIGTERM)
 					defer stop()
 
 					if !demoMode {
-						for _, task := range ts {
+						for _, task := range tsks {
 							go task.Start(ctx.Context)
 						}
 					}

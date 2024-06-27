@@ -1,7 +1,7 @@
 //go:build dev
 // +build dev
 
-package mockstore
+package mock
 
 import (
 	"github.com/august-kuhfuss/hotdamn/store"

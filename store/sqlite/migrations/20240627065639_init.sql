@@ -1,0 +1,25 @@
+-- +goose Up
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS SENSORS (
+    id TEXT NOT NULL UNIQUE PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    name TEXT NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS MEASUREMENTS (
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sensor_id TEXT NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
+    value_k REAL NOT NULL,
+    PRIMARY KEY (sensor_id, TIMESTAMP),
+    FOREIGN KEY (sensor_id) REFERENCES SENSORS(id)
+);
+-- +goose StatementEnd
+
+-- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS MEASUREMENTS;
+DROP TABLE IF EXISTS SENSORS;
+-- +goose StatementEnd
